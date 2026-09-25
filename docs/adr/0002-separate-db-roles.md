@@ -17,11 +17,16 @@ RLS は、スーパーユーザーと `BYPASSRLS` 属性を持つロールには
 | ロール | ログイン | 役割 |
 |---|---|---|
 | `migrator` | 不可 | テーブル・ポリシーの所有者。マイグレーションで `SET ROLE` して使う |
-| `app_user` | 可 | アプリ用。所有者ではなく `BYPASSRLS` もない。業務テーブルへの DML だけ |
+| `app_user` | 可 | アプリ用。所有者ではなく `BYPASSRLS` もない。業務テーブルへの DML だけ（INSERT・UPDATE は列単位で許可し、`id` 列は書けない） |
 | `ops_user` | 可 | 運営者用。テナント横断の専用関数の EXECUTE だけ（[ADR-0003](0003-cross-tenant-operations.md)） |
 | `cross_tenant_definer` | 不可 | 横断用 `SECURITY DEFINER` 関数の所有者。`BYPASSRLS` を持つ唯一のロール |
 
-あわせて、`public` スキーマの既定権限を取り消し、オブジェクトは専用の `app` スキーマに置く。`migrator` が作る関数は、既定で PUBLIC に付く EXECUTE を `ALTER DEFAULT PRIVILEGES` で取り消す。
+あわせて、アプリの接続に不要な権限は与えない。
+
+- `public` スキーマの既定権限を取り消し、オブジェクトは専用の `app` スキーマに置く
+- `migrator` が作る関数は、既定で PUBLIC に付く EXECUTE を `ALTER DEFAULT PRIVILEGES` で取り消す
+- 一時テーブルの作成権限（既定で PUBLIC に付く `TEMPORARY`）を取り消す
+- `id` 列は DB の `gen_random_uuid()` だけで採番し、`app_user` には書かせない。`id` を指定できると、一意制約違反のエラーから他テナントの行の存在を推測できるため
 監査ログ（`app.audit_log`）は、どのロールにも UPDATE・DELETE を許可せず、さらにトリガーで所有者やスーパーユーザーによる UPDATE・DELETE・TRUNCATE も拒否する（append-only）。
 
 ## Alternatives Considered

@@ -50,4 +50,4 @@
 
 ### Risks
 - **テーブル所有者や `BYPASSRLS` ロールでアプリが接続すると RLS が効かない** → [ADR-0002](0002-separate-db-roles.md) でロールを分ける
-- **新しいテーブルでポリシーを付け忘れる** → テストで全テナントテーブルの `relrowsecurity` / `relforcerowsecurity` を検査する
+- **新しいテーブルでポリシーを付け忘れる** → `tenant_id` 列を持つテーブルをカタログから列挙し、`relrowsecurity` / `relforcerowsecurity` とテナント単位のポリシーの有無を検査するテストを置く（テーブルを固定のリストで書かないので、新しく追加したテーブルも対象になる）

@@ -2,14 +2,21 @@
 
 **Date**: 2026-09-25
 **Status**: accepted
-**Deciders**: リポジトリ作成者（Skeptic・Pragmatist・Critic の3つの観点で案を比較して決定）
+**Deciders**: リポジトリ作成者（3つの渡し方の案を、実装の単純さ・fail-closed の一貫性・失敗するケースの観点で比較して決定）
 
 ## Context
 
 同じテナントの中でも、店舗の管理者（`store_manager`）は自分の店舗のデータ（店舗そのもの・スタッフ・予約）だけ、テナントの管理者（`tenant_admin`）は全店舗のデータを扱う、という二段目の分離が必要。
 テナント単位の分離（[ADR-0001](0001-rls-defense-in-depth.md)）は「未設定なら 0 行」という fail-closed を原則にしている。二段目でも同じ原則を守りたい。
+店舗の情報を DB に渡す方法として、次の3案を比べた。
+
+- 案A: `app.store_id` だけを追加し、空ならテナント管理者とみなす
+- **案B（採用）: `app.role` と `app.store_id` の両方を明示する**
+- 案C: 店舗管理者用に別の DB ロールを作る
 
 ## Decision
+
+案B を採用する。
 
 - `withTenant` の ctx を判別共用体にする: `{ tenantId, role: 'tenant_admin' } | { tenantId, role: 'store_manager', storeId }`
 - `app.tenant_id`・`app.role`・`app.store_id` の3つを、1つの SELECT でまとめて `set_config(..., true)` する（途中まで設定された状態を作らない）
@@ -22,17 +29,17 @@ COALESCE(
         AND store_id = (SELECT app.current_store_id())), false)
 ```
 
-- 式は関数に共通化せず、ポリシーごとに直接書く
+- 式は関数に共通化せず、ポリシーごとに直接書く（理由は下の「却下した書き方」）
 - 予約の担当スタッフは `(tenant_id, store_id, staff_id)` の複合外部キーで、同じ店舗のスタッフに限る
 
 ## Alternatives Considered
 
-### Alternative A: `app.store_id` だけを追加し、空ならテナント管理者とみなす
+### 案A: `app.store_id` だけを追加し、空ならテナント管理者とみなす
 - **Pros**: GUC が1つ増えるだけで最も単純
 - **Cons**: 「店舗 ID を設定し忘れると全店舗が見える」＝設定がないほど権限が広がる
 - **Why not**: テナント単位の fail-closed と正反対の振る舞いが同じリポジトリに並び、原則が一貫しない
 
-### Alternative C: 店舗管理者用に別の DB ロールを作り、ポリシーの `TO` 句で分ける
+### 案C: 店舗管理者用に別の DB ロールを作り、ポリシーの `TO` 句で分ける
 - **Pros**: DB のロールで権限の違いを表現できる
 - **Cons**: ロールごとに接続プールが必要。結局、店舗 ID は GUC で渡す必要がある
 - **Why not**: 得られるものに対して構成が複雑すぎる
@@ -44,8 +51,8 @@ COALESCE(
 - PERMISSIVE 同士は OR で結ばれるので、テナント単位のポリシーを満たすだけで他店舗の予約が見えてしまう
 
 ### 却下した書き方: 式を SQL 関数（例: `app.can_access_store(store_id)`）に共通化する
-- 本体に `(SELECT ...)` を含む SQL 関数はインライン展開されず、行ごとの関数呼び出しになる。含まない関数は展開されるが、`current_setting` が行ごとに評価され initPlan にならない（どちらも EXPLAIN で確認）
 - どの列と比べているかが関数の中に隠れ、ポリシーを読んだだけでは分からなくなる
+- 実行計画で、関数にまとめると initPlan（クエリの最初に1回だけ評価する形）にならないことを確認した（下の「根拠: 実行計画」）
 - 重複する3つの式は、`__tests__/store-scope.test.ts` で3テーブルそれぞれを検査して守る
 
 ### 却下した書き方: 店舗の作成を GRANT／REVOKE で止める
@@ -55,19 +62,57 @@ COALESCE(
 - 店舗テーブルに店舗単位のポリシーがないと、`store_manager` が他店舗の名前を書き換えたり、新しい店舗を作れたりする
 - スタッフに制限がないと、他店舗のスタッフの一覧を見たり、他店舗にスタッフを登録できたりする
 
+## 根拠: 実行計画
+
+PostgreSQL 16、`app_user` で `store_manager` を設定して取得した `EXPLAIN (COSTS OFF)`。
+
+**採用した書き方（ポリシーに直接書く）** — `SELECT * FROM app.reservations`:
+
+```
+Bitmap Heap Scan on reservations
+  Recheck Cond: (tenant_id = $3)
+  Filter: COALESCE((($0 = 'tenant_admin'::text) OR (($1 = 'store_manager'::text) AND (store_id = $2))), false)
+  InitPlan 1 (returns $0)
+    ->  Result
+  InitPlan 2 (returns $1)
+    ->  Result
+  InitPlan 3 (returns $2)
+    ->  Result
+  InitPlan 4 (returns $3)
+    ->  Result
+  ->  Bitmap Index Scan on reservations_tenant_store_starts_idx
+        Index Cond: (tenant_id = $3)
+```
+
+設定値の読み取りは `InitPlan 1〜4` として最初に1回だけ評価され、行ごとには `$0`〜`$3` と比べるだけになる。テナントの条件はインデックスで絞り込まれる。
+
+**関数にまとめた場合** — `SELECT * FROM app.staff WHERE <関数>(store_id)`:
+
+```
+-- 関数の本体に (SELECT ...) を含む場合: インライン展開されず、行ごとの関数呼び出しになる
+Seq Scan on staff
+  Filter: app.tmp_x(store_id)
+
+-- 関数の本体に (SELECT ...) を含まない場合: 展開されるが、current_setting が行ごとに評価される
+Seq Scan on staff
+  Filter: COALESCE(((NULLIF(current_setting('app.role'::text, true), ''::text) = 'tenant_admin'::text) OR (...)), false)
+```
+
+どちらの書き方でも InitPlan にならない。
+
 ## Consequences
 
 ### Positive
 - role が未設定・想定外の値、または `store_manager` なのに store_id が未設定なら、いずれも 0 行（`__tests__/store-scope.test.ts`）
+- テナントと店舗が食い違う設定（テナント B の設定で A の店舗を指定するなど）も、2つのポリシーが AND で結ばれるので 0 行（同）
 - 「store_manager なのに storeId がない」状態は、TypeScript の型の時点で作れない
 - `COALESCE(..., false)` により、NULL を拒否として扱う RLS の暗黙の性質に頼らず、fail-closed が式の上で読める（動作は同じ）
-
-- `store_manager` は、他店舗へのスタッフ登録・異動、他店舗の名前の変更、新しい店舗の作成ができない（同）
+- `store_manager` は、他店舗へのスタッフ登録・異動・削除、他店舗の名前の変更、新しい店舗の作成ができない（同）
 
 ### Negative
 - 式の中で role の種類ごとに分岐するため、role が増えると式が長くなる
 - 同じ形の式が3つのポリシーに重複する。変更するときは3か所をそろえる必要がある
 
 ### Risks
-- **誤って PERMISSIVE で作り直される** → `pg_policies` で3つの `store_scope` が RESTRICTIVE であることをテストで検査する。実際に予約のポリシーを PERMISSIVE へ差し替えると、テスト7の8件が失敗することを確認済み
+- **誤って PERMISSIVE で作り直される** → `pg_policies` で3つの `store_scope` が RESTRICTIVE であることをテストで検査する。実際に予約のポリシーだけを PERMISSIVE へ差し替えると、`store-scope.test.ts` の 19 件のうち 10 件が失敗することを確認済み
 - **アプリが誤った role・store_id を渡す** → RLS は渡された値を信じるだけなので、値を認証情報から正しく導くことはアプリ側の責任。型とテストで守る
