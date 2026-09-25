@@ -1,0 +1,29 @@
+{
+  "name": "multitenant-rls-sample",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PostgreSQL Row Level Security によるマルチテナントのデータ分離サンプル",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down -v",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:reset": "docker compose down -v && docker compose up -d --wait && tsx scripts/migrate.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  }
+}

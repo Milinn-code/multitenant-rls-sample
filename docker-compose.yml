@@ -1,0 +1,16 @@
+# ローカル開発・テスト専用の PostgreSQL。
+# パスワードはローカル用の固定値で、秘密情報ではない（本番では使わない）。
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rls_sample
+    ports:
+      - "54329:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rls_sample"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
