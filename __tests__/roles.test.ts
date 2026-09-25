@@ -22,13 +22,12 @@ describe("8. app_user の権限", () => {
         expect(rows).toEqual([{ rolsuper: false, rolbypassrls: false }]);
     });
 
-    it("tenant_id 列を持つテーブルはすべて ENABLE + FORCE で、テナント単位のポリシーがある（新しいテーブルの付け忘れも検出）", async () => {
+    it("tenant_id 列を持つテーブルはすべて ENABLE + FORCE で、テナントを絞るポリシーだけが行を許可する（新しいテーブルの付け忘れも検出）", async () => {
         // テーブルを固定のリストで書かず、カタログから列挙する
-        const { rows } = await admin.query<{ relname: string; enabled: boolean; forced: boolean; policies: string[] }>(
+        const { rows } = await admin.query<{ relname: string; enabled: boolean; forced: boolean }>(
             `SELECT c.relname,
                     c.relrowsecurity AS enabled,
-                    c.relforcerowsecurity AS forced,
-                    ARRAY(SELECT p.polname::text FROM pg_policy p WHERE p.polrelid = c.oid ORDER BY 1) AS policies
+                    c.relforcerowsecurity AS forced
                FROM pg_class c
               WHERE c.relnamespace = 'app'::regnamespace AND c.relkind = 'r'
                 AND (c.relname = 'tenants'
@@ -37,9 +36,33 @@ describe("8. app_user の権限", () => {
               ORDER BY c.relname`,
         );
         expect(rows.map((r) => r.relname)).toEqual(expect.arrayContaining(TENANT_TABLES));
+
+        const { rows: policies } = await admin.query<{
+            tablename: string;
+            policyname: string;
+            cmd: string;
+            qual: string | null;
+            with_check: string | null;
+        }>(
+            `SELECT tablename, policyname, cmd, qual, with_check FROM pg_policies
+              WHERE schemaname = 'app' AND permissive = 'PERMISSIVE'`,
+        );
+
         for (const row of rows) {
             expect(row, row.relname).toMatchObject({ enabled: true, forced: true });
-            expect(row.policies, row.relname).toContain("tenant_isolation");
+
+            // PERMISSIVE どうしは OR で結ばれるので、USING (true) のようなポリシーが1つ増えるだけで分離が外れる。
+            // 行を許可できるのは、テナントの ID と比べる tenant_isolation の1つだけであることを確かめる
+            const permissive = policies.filter((p) => p.tablename === row.relname);
+            expect(permissive.map((p) => p.policyname), row.relname).toEqual(["tenant_isolation"]);
+
+            const column = row.relname === "tenants" ? "id" : "tenant_id";
+            const tenantFilter = `(${column} = ( SELECT app.current_tenant_id() AS current_tenant_id))`;
+            const policy = permissive[0]!;
+            expect(policy.qual, `${row.relname} の USING`).toBe(tenantFilter);
+            if (policy.cmd !== "SELECT") {
+                expect(policy.with_check, `${row.relname} の WITH CHECK`).toBe(tenantFilter);
+            }
         }
     });
 

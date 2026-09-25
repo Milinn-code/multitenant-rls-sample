@@ -150,14 +150,16 @@ describe("7. 店舗の管理者は、同じテナントでも他の店舗の予�
             ["テナント B の設定で、A の店舗を指定", TENANT_B, STORE_A1],
             ["テナント A の設定で、B の店舗を指定", TENANT_A, STORE_B1],
         ])("%s", async (_label, tenantId, storeId) => {
+            // 1つの接続に同時にクエリを送らない（pg では非推奨）ので、順番に実行する
             const counts = await withTenant(
                 { tenantId, role: "store_manager", storeId },
-                async ({ client }) =>
-                    Promise.all(
-                        ["app.stores", "app.staff", "app.reservations"].map(
-                            async (table) => (await client.query(`SELECT 1 FROM ${table}`)).rowCount,
-                        ),
-                    ),
+                async ({ client }) => {
+                    const result: (number | null)[] = [];
+                    for (const table of ["app.stores", "app.staff", "app.reservations"]) {
+                        result.push((await client.query(`SELECT 1 FROM ${table}`)).rowCount);
+                    }
+                    return result;
+                },
                 app,
             );
             expect(counts).toEqual([0, 0, 0]);

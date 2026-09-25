@@ -28,6 +28,8 @@ RLS は、スーパーユーザーと `BYPASSRLS` 属性を持つロールには
 - 一時テーブルの作成権限（既定で PUBLIC に付く `TEMPORARY`）を取り消す
 - `id` 列は DB の `gen_random_uuid()` だけで採番し、`app_user` には書かせない。`id` を指定できると、一意制約違反のエラーから他テナントの行の存在を推測できるため
 監査ログ（`app.audit_log`）は、どのロールにも UPDATE・DELETE を許可せず、さらにトリガーで所有者やスーパーユーザーによる UPDATE・DELETE・TRUNCATE も拒否する（append-only）。
+監査ログはテナントに属さない運営用のテーブルなので RLS はかけず、代わりに権限で守る。書き込めるのは横断用関数の所有者（`cross_tenant_definer`）だけで、`app_user` にはどの権限も与えない。
+テナントの一覧（`app.tenants`）も、`app_user` には読み取り（自分のテナントの行だけ）しか許可しない。テナントの作成・変更は管理側の仕事とする。
 
 ## Alternatives Considered
 
