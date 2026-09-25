@@ -52,7 +52,16 @@ CREATE INDEX reservations_tenant_store_staff_idx ON app.reservations (tenant_id,
 
 -- アプリ用ロール: テナントの一覧・作成はできない（プロビジョニングは管理側の仕事）
 GRANT SELECT ON app.tenants TO app_user;
-GRANT SELECT, INSERT, UPDATE, DELETE ON app.stores, app.staff, app.reservations TO app_user;
+GRANT SELECT, DELETE ON app.stores, app.staff, app.reservations TO app_user;
+-- INSERT・UPDATE は列単位で許可し、id は書かせない（DB の gen_random_uuid() だけで採番する）。
+-- id を指定できると、一意制約違反のエラーから「他テナントにその id の行があるか」を推測できるため。
+-- tenant_id は UPDATE の対象に残す。tenant_id の書き換えを止めるのは、権限ではなく RLS の WITH CHECK。
+GRANT INSERT (tenant_id, name),
+      UPDATE (tenant_id, name) ON app.stores TO app_user;
+GRANT INSERT (tenant_id, store_id, display_name),
+      UPDATE (tenant_id, store_id, display_name) ON app.staff TO app_user;
+GRANT INSERT (tenant_id, store_id, staff_id, customer_label, starts_at),
+      UPDATE (tenant_id, store_id, staff_id, customer_label, starts_at) ON app.reservations TO app_user;
 
 -- 横断用関数の所有者: 集計に必要な読み取りだけ
 GRANT SELECT ON app.tenants, app.stores, app.reservations TO cross_tenant_definer;

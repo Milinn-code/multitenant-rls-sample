@@ -30,6 +30,13 @@ $$;
 -- public スキーマの既定権限を閉じ、アプリのオブジェクトは専用スキーマに置く
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 
+-- 一時テーブルの作成権限（既定で PUBLIC に付く）も取り消す。アプリの接続に不要な権限は与えない
+DO $$
+BEGIN
+    EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+END
+$$;
+
 CREATE SCHEMA app AUTHORIZATION migrator;
 GRANT USAGE ON SCHEMA app TO app_user, ops_user, cross_tenant_definer;
 

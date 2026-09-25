@@ -19,6 +19,7 @@ import {
     newAdminPool,
     newAppPool,
     resetFixtures,
+    withRawSettings,
 } from "./helpers.js";
 
 const admin = newAdminPool();
@@ -115,22 +116,22 @@ describe("3. 他テナントの tenant_id での書き込みは拒否される�
 
 describe("4. テナントを設定しないと、どのテーブルも0行（fail-closed）", () => {
     it.each(["app.tenants", "app.stores", "app.staff", "app.reservations"])("%s", async (table) => {
-        // withTenant を通さず、素の接続で問い合わせる
-        const { rows } = await app.query(`SELECT * FROM ${table}`);
-        expect(rows).toHaveLength(0);
+        // 一度も設定していない新しい接続で、withTenant を通さずに問い合わせる
+        // （設定済みの接続を使い回した場合は、6 の connection-reuse.test.ts で確かめる）
+        const fresh = newAppPool(1);
+        try {
+            const { rows } = await fresh.query(`SELECT * FROM ${table}`);
+            expect(rows).toHaveLength(0);
+        } finally {
+            await fresh.end();
+        }
     });
 
     it("空文字を設定しても0行", async () => {
-        const client = await app.connect();
-        try {
-            await client.query("BEGIN");
-            await client.query("SELECT set_config('app.tenant_id', '', true)");
-            const { rows } = await client.query("SELECT * FROM app.reservations");
-            expect(rows).toHaveLength(0);
-        } finally {
-            await client.query("ROLLBACK");
-            client.release();
-        }
+        const { rows } = await withRawSettings(app, { "app.tenant_id": "" }, (client) =>
+            client.query("SELECT * FROM app.reservations"),
+        );
+        expect(rows).toHaveLength(0);
     });
 });
 

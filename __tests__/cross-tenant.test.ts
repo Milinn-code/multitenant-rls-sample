@@ -1,6 +1,16 @@
-// 9. 横断用の SECURITY DEFINER 関数は結果を返し、必ず監査ログが1行増える。監査ログは書き換えられない。
+// 9. 横断用の SECURITY DEFINER 関数は結果を返し、必ず監査ログが1行増える。
+//    監査ログは、所有者やスーパーユーザーでも直接は書き換えられない
+//    （トリガー自体を外す操作は防げない。README の「防げないこと」を参照）。
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { TENANT_A, TENANT_B, newAdminPool, newAppPool, newOpsPool, resetFixtures } from "./helpers.js";
+import {
+    TENANT_A,
+    TENANT_B,
+    newAdminPool,
+    newAppPool,
+    newOpsPool,
+    resetFixtures,
+    withRawSettings,
+} from "./helpers.js";
 
 const admin = newAdminPool();
 const app = newAppPool();
@@ -67,10 +77,14 @@ describe("9. テナント横断の操作", () => {
             }
         });
 
-        it.each(["migrator", "postgres"])("所有者（migrator）やスーパーユーザー（%s）でもトリガーで拒否される", async (role) => {
-            const client = await admin.connect();
-            try {
-                await client.query("BEGIN");
+        it.each([
+            ["所有者（migrator）", "migrator"],
+            ["スーパーユーザー（postgres）", "postgres"],
+        ])("%s でも、直接の書き換えはトリガーで拒否される", async (_label, role) => {
+            // UPDATE・DELETE の行トリガーは対象の行がないと発火しないので、必ず1行以上ある状態にする
+            await ops.query("SELECT * FROM app.ops_reservation_summary('fixture for append-only test')");
+
+            await withRawSettings(admin, {}, async (client) => {
                 if (role === "migrator") await client.query("SET LOCAL ROLE migrator");
                 for (const sql of [
                     "UPDATE app.audit_log SET reason = 'tampered'",
@@ -83,10 +97,7 @@ describe("9. テナント横断の操作", () => {
                     });
                     await client.query("ROLLBACK TO SAVEPOINT s");
                 }
-            } finally {
-                await client.query("ROLLBACK");
-                client.release();
-            }
+            });
         });
     });
 });
